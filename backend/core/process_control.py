@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 
@@ -101,6 +102,78 @@ def close_job(job_handle) -> None:
         pass
 
 
+def _unix_process_tree(root_pid: int) -> set[int]:
+    """Snapshot a Unix process tree, including descendants in new sessions."""
+    result = subprocess.run(
+        ["ps", "-axo", "pid=,ppid="],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=5,
+        check=False,
+    )
+    if result.returncode != 0:
+        return {root_pid}
+    children: dict[int, list[int]] = {}
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) != 2:
+            continue
+        try:
+            pid, parent = int(fields[0]), int(fields[1])
+        except ValueError:
+            continue
+        children.setdefault(parent, []).append(pid)
+    tree = {root_pid}
+    pending = [root_pid]
+    while pending:
+        parent = pending.pop()
+        for child in children.get(parent, []):
+            if child not in tree:
+                tree.add(child)
+                pending.append(child)
+    return tree
+
+
+def _terminate_unix_tree(proc: subprocess.Popen) -> None:
+    """Kill every owned process group, including nested new sessions."""
+    try:
+        process_ids = _unix_process_tree(proc.pid)
+    except (OSError, subprocess.SubprocessError):
+        process_ids = {proc.pid}
+
+    own_group = os.getpgrp()
+    groups: set[int] = set()
+    ungrouped: set[int] = set()
+    for pid in process_ids:
+        try:
+            group = os.getpgid(pid)
+        except ProcessLookupError:
+            continue
+        except OSError:
+            ungrouped.add(pid)
+            continue
+        if group == own_group:
+            ungrouped.add(pid)
+        else:
+            groups.add(group)
+
+    # Descendants may deliberately create their own sessions. Killing only the
+    # root group would leave those commands alive after an Agent cancellation.
+    for group in groups:
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    for pid in ungrouped:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
 def terminate_tree(proc: subprocess.Popen, job_handle=None) -> None:
     """Terminate descendants and wait until the root process is reaped."""
     if proc.poll() is not None:
@@ -119,7 +192,7 @@ def terminate_tree(proc: subprocess.Popen, job_handle=None) -> None:
                 )
         else:
             try:
-                os.killpg(proc.pid, 9)
+                _terminate_unix_tree(proc)
             except ProcessLookupError:
                 pass
             except OSError:
