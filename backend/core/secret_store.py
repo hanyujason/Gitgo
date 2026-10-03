@@ -1,10 +1,9 @@
 """User-scoped encrypted secret storage.
 
-Provider metadata is intentionally kept separate from credentials.  On
-Windows, values are protected with DPAPI for the current OS user before they
-are written to disk.  The file contains only opaque ciphertext and may safely
-be backed up together with other Gitgo user state (it is not portable to a
-different Windows account).
+Provider metadata is intentionally kept separate from credentials. Windows
+uses DPAPI for the current OS user. macOS stores each value in the login
+Keychain and writes only an opaque Keychain reference to disk. Neither backend
+creates portable credential data or places plaintext in Gitgo state files.
 """
 
 from __future__ import annotations
@@ -15,6 +14,7 @@ from ctypes import wintypes
 import json
 import os
 from pathlib import Path
+import sys
 import threading
 import uuid
 
@@ -82,6 +82,172 @@ class WindowsDPAPIProtector:
             self._kernel32.LocalFree(output.pbData)
 
 
+class _MacOSSecurityFramework:
+    """Minimal ctypes bridge to the native macOS Keychain Services API."""
+
+    _SUCCESS = 0
+    _ITEM_NOT_FOUND = -25300
+
+    def __init__(self) -> None:
+        security_path = "/System/Library/Frameworks/Security.framework/Security"
+        core_foundation_path = (
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+        )
+        try:
+            self._security = ctypes.CDLL(security_path)
+            self._core_foundation = ctypes.CDLL(core_foundation_path)
+        except OSError as exc:
+            raise SecretStoreError("macOS Keychain framework is unavailable") from exc
+
+        self._security.SecKeychainAddGenericPassword.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_char_p,
+            ctypes.c_uint32, ctypes.c_char_p, ctypes.c_uint32,
+            ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._security.SecKeychainAddGenericPassword.restype = ctypes.c_int32
+        self._security.SecKeychainFindGenericPassword.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_char_p,
+            ctypes.c_uint32, ctypes.c_char_p,
+            ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_void_p),
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        self._security.SecKeychainFindGenericPassword.restype = ctypes.c_int32
+        self._security.SecKeychainItemFreeContent.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p,
+        ]
+        self._security.SecKeychainItemFreeContent.restype = ctypes.c_int32
+        self._security.SecKeychainItemDelete.argtypes = [ctypes.c_void_p]
+        self._security.SecKeychainItemDelete.restype = ctypes.c_int32
+        self._core_foundation.CFRelease.argtypes = [ctypes.c_void_p]
+        self._core_foundation.CFRelease.restype = None
+
+    @staticmethod
+    def _encoded(value: str) -> bytes:
+        return value.encode("utf-8")
+
+    @staticmethod
+    def _raise(action: str, status: int) -> None:
+        raise SecretStoreError(
+            f"macOS Keychain {action} failed (OSStatus {status})"
+        )
+
+    def add(self, service: str, account: str, plaintext: str) -> None:
+        service_data = self._encoded(service)
+        account_data = self._encoded(account)
+        password_data = self._encoded(plaintext)
+        item_ref = ctypes.c_void_p()
+        status = self._security.SecKeychainAddGenericPassword(
+            None,
+            len(service_data), service_data,
+            len(account_data), account_data,
+            len(password_data), password_data,
+            ctypes.byref(item_ref),
+        )
+        try:
+            if status != self._SUCCESS:
+                self._raise("write", status)
+        finally:
+            if item_ref.value:
+                self._core_foundation.CFRelease(item_ref)
+
+    def read(self, service: str, account: str) -> str:
+        service_data = self._encoded(service)
+        account_data = self._encoded(account)
+        password_length = ctypes.c_uint32()
+        password_data = ctypes.c_void_p()
+        item_ref = ctypes.c_void_p()
+        status = self._security.SecKeychainFindGenericPassword(
+            None,
+            len(service_data), service_data,
+            len(account_data), account_data,
+            ctypes.byref(password_length), ctypes.byref(password_data),
+            ctypes.byref(item_ref),
+        )
+        try:
+            if status != self._SUCCESS:
+                self._raise("read", status)
+            try:
+                raw = ctypes.string_at(password_data, password_length.value)
+                return raw.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise SecretStoreError(
+                    "macOS Keychain credential is not UTF-8"
+                ) from exc
+        finally:
+            if password_data.value:
+                self._security.SecKeychainItemFreeContent(None, password_data)
+            if item_ref.value:
+                self._core_foundation.CFRelease(item_ref)
+
+    def delete(self, service: str, account: str) -> None:
+        service_data = self._encoded(service)
+        account_data = self._encoded(account)
+        item_ref = ctypes.c_void_p()
+        status = self._security.SecKeychainFindGenericPassword(
+            None,
+            len(service_data), service_data,
+            len(account_data), account_data,
+            None, None, ctypes.byref(item_ref),
+        )
+        if status == self._ITEM_NOT_FOUND:
+            return
+        if status != self._SUCCESS:
+            self._raise("lookup for deletion", status)
+        try:
+            delete_status = self._security.SecKeychainItemDelete(item_ref)
+            if delete_status not in (self._SUCCESS, self._ITEM_NOT_FOUND):
+                self._raise("delete", delete_status)
+        finally:
+            if item_ref.value:
+                self._core_foundation.CFRelease(item_ref)
+
+
+class MacOSKeychainProtector:
+    """Store credentials in Keychain and expose only opaque references."""
+
+    SERVICE = "io.github.truman-duo.gitgo.provider-credentials"
+    REFERENCE_PREFIX = "macos-keychain:"
+
+    def __init__(self, keychain=None) -> None:
+        if sys.platform != "darwin" and keychain is None:
+            raise SecretStoreError("macOS Keychain is unavailable on this platform")
+        self._keychain = keychain or _MacOSSecurityFramework()
+
+    def _account(self, reference: str) -> str:
+        if not reference.startswith(self.REFERENCE_PREFIX):
+            raise SecretStoreError("Credential is not a macOS Keychain reference")
+        account = reference[len(self.REFERENCE_PREFIX):]
+        try:
+            parsed = uuid.UUID(hex=account)
+        except (ValueError, AttributeError) as exc:
+            raise SecretStoreError("macOS Keychain reference is invalid") from exc
+        if parsed.hex != account:
+            raise SecretStoreError("macOS Keychain reference is invalid")
+        return account
+
+    def protect(self, plaintext: str) -> str:
+        account = uuid.uuid4().hex
+        self._keychain.add(self.SERVICE, account, plaintext)
+        return f"{self.REFERENCE_PREFIX}{account}"
+
+    def unprotect(self, reference: str) -> str:
+        return self._keychain.read(self.SERVICE, self._account(reference))
+
+    def delete(self, reference: str) -> None:
+        self._keychain.delete(self.SERVICE, self._account(reference))
+
+
+def default_secret_protector():
+    """Select the current OS credential backend without an insecure fallback."""
+    if os.name == "nt":
+        return WindowsDPAPIProtector()
+    if sys.platform == "darwin":
+        return MacOSKeychainProtector()
+    raise SecretStoreError(
+        f"Secure credential storage is unavailable on platform {sys.platform!r}"
+    )
+
+
 class EncryptedSecretStore:
     """Atomic encrypted key/value store.
 
@@ -93,8 +259,19 @@ class EncryptedSecretStore:
 
     def __init__(self, path: Path, protector=None) -> None:
         self.path = Path(path)
-        self.protector = protector or WindowsDPAPIProtector()
+        self.protector = protector or default_secret_protector()
         self._lock = threading.RLock()
+
+    def _delete_protected(self, value: str) -> None:
+        delete = getattr(self.protector, "delete", None)
+        if callable(delete):
+            try:
+                delete(value)
+            except SecretStoreError:
+                # The durable store no longer references this value. Failure
+                # to remove an orphan must not make a successful save appear
+                # to have failed or risk rolling metadata back to stale data.
+                pass
 
     def _read_ciphertexts(self) -> dict[str, str]:
         if not self.path.exists():
@@ -122,9 +299,23 @@ class EncryptedSecretStore:
             return
         with self._lock:
             encrypted = self._read_ciphertexts()
-            for key, value in values.items():
-                encrypted[str(key)] = self.protector.protect(str(value))
-            self._write_ciphertexts(encrypted)
+            replacements: dict[str, tuple[str | None, str]] = {}
+            try:
+                for key, value in values.items():
+                    normalized_key = str(key)
+                    protected = self.protector.protect(str(value))
+                    replacements[normalized_key] = (
+                        encrypted.get(normalized_key), protected,
+                    )
+                    encrypted[normalized_key] = protected
+                self._write_ciphertexts(encrypted)
+            except Exception:
+                for _old, protected in replacements.values():
+                    self._delete_protected(protected)
+                raise
+            for old, protected in replacements.values():
+                if old and old != protected:
+                    self._delete_protected(old)
 
     def retain_only(self, keys: set[str]) -> None:
         with self._lock:
@@ -132,6 +323,9 @@ class EncryptedSecretStore:
             retained = {key: value for key, value in encrypted.items() if key in keys}
             if retained != encrypted:
                 self._write_ciphertexts(retained)
+                for key, value in encrypted.items():
+                    if key not in retained:
+                        self._delete_protected(value)
 
     def _write_ciphertexts(self, values: dict[str, str]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
