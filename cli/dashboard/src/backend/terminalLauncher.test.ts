@@ -46,8 +46,13 @@ describe("installed terminal launcher", () => {
   });
 
   test("uses the global config location or the explicit isolation path", () => {
-    expect(globalConfigPath({}, "C:\\Users\\Ada")).toBe("C:\\Users\\Ada\\.gitgo\\config.json");
-    expect(globalConfigPath({GITGO_CONFIG_PATH: "C:\\Temp\\isolated.json"}, "ignored"))
+    expect(globalConfigPath({}, "C:\\Users\\Ada", "win32"))
+      .toBe("C:\\Users\\Ada\\.gitgo\\config.json");
+    expect(globalConfigPath(
+      {GITGO_CONFIG_PATH: "C:\\Temp\\isolated.json"}, "ignored", "win32",
+    ))
       .toBe("C:\\Temp\\isolated.json");
+    expect(globalConfigPath({}, "/Users/ada", "darwin"))
+      .toBe("/Users/ada/.gitgo/config.json");
   });
 });
