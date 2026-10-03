@@ -49,6 +49,33 @@ Platform packages are built independently. Windows uses an `.exe` launcher and
 installer; macOS and Linux expose the same command/protocol/config contracts but
 use native package and credential-store adapters.
 
+## macOS package and installer
+
+`packaging/build_macos.sh` builds one architecture at a time on macOS. It
+compiles the Bun Dashboard as the public `gitgo` command, freezes the Python
+Native Host with PyInstaller, performs the packaged Host/Daemon/tool-runner
+smoke test, applies ad-hoc code signatures by default, and creates a
+`dist-installer/gitgo-macos-<architecture>.tar.gz` archive plus its SHA-256
+file. A Developer ID identity can be supplied for a publishable signed build;
+Apple notarization remains a separate credentialed release step.
+
+After extracting the archive, run `./install.sh`. The installer is per-user and
+does not use `sudo`: payload files go under
+`~/Library/Application Support/Gitgo/app`, while `~/.local/bin/gitgo` is an
+owned symlink. The installer adds one marked PATH block to the active zsh or
+bash profile, or a dedicated fish `conf.d` file. Re-running it performs an
+atomic upgrade with rollback.
+
+Run the installed `uninstall.sh` to remove the application. It removes only
+Gitgo-owned command links, marked PATH entries, global configuration, and
+provider credentials (including native Keychain items). Runtime databases and
+all project directories, repositories, worktrees, and project `.gitgo` data
+are preserved. `--keep-config` keeps global configuration and credentials too.
+
+`packaging/release_macos.sh` is the fail-closed release entry point. It mirrors
+the Windows privacy, test, clean-tree, commit-message, and build gates and never
+pushes or installs anything.
+
 ## Release build prerequisites
 
 `build_windows.ps1` selects `GITGO_PYTHON`, `~/.gitgo/runtime/python`, or the

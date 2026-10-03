@@ -7,7 +7,7 @@ import { setBackendClient } from "./clients.js";
 import { App } from "./components/App.js";
 import { InputProvider } from "./input/runtime.js";
 import { dirname, resolve } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { resolvePythonRuntime } from "./backend/pythonRuntime.js";
 import {
   loadTerminalLauncherConfig,
@@ -17,7 +17,12 @@ import {
   windowsParentProcessName,
 } from "./backend/terminalLauncher.js";
 
-const EXECUTABLE_DIR = dirname(process.execPath);
+// Per-user Unix installers expose the public command through a symlink. Resolve
+// it before locating product.json and the private Native Host beside the binary.
+const EXECUTABLE_PATH = (() => {
+  try { return realpathSync(process.execPath); } catch { return process.execPath; }
+})();
+const EXECUTABLE_DIR = dirname(EXECUTABLE_PATH);
 const COMPILED = Boolean(
   process.env.GITGO_INSTALL_ROOT
   || existsSync(resolve(EXECUTABLE_DIR, "product.json"))
@@ -32,10 +37,12 @@ const INTERNAL_HOST = (() => {
   if (explicit) return explicit;
   const name = process.platform === "win32" ? "gitgo-host.exe" : "gitgo-host";
   const candidates = [
-    resolve(GITGO_DIR, "internal", name),
     resolve(GITGO_DIR, "internal", "gitgo-host", name),
+    resolve(GITGO_DIR, "internal", name),
   ];
-  return candidates.find(existsSync) || "";
+  return candidates.find((candidate) => {
+    try { return statSync(candidate).isFile(); } catch { return false; }
+  }) || "";
 })();
 
 // ── Alt-Screen vs Main-Screen ──────────────────────────────────────────

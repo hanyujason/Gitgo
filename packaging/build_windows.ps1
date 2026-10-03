@@ -113,8 +113,10 @@ if ($useExternalPyInstaller) {
 }
 if ($LASTEXITCODE -ne 0) { throw "Native Host compilation failed" }
 
-Copy-Item -LiteralPath $productPath `
-    -Destination (Join-Path $stage "product.json") -Force
+& $Python -B (Join-Path $root "scripts\render_product_manifest.py") `
+    --source $productPath --platform windows `
+    --output (Join-Path $stage "product.json")
+if ($LASTEXITCODE -ne 0) { throw "Product manifest rendering failed" }
 
 $packagedHost = Join-Path $internal "gitgo-host\gitgo-host.exe"
 & $Python -B (Join-Path $root "scripts\smoke_packaged_runtime.py") --host $packagedHost

@@ -99,3 +99,18 @@ def test_secret_store_removes_replaced_and_unreferenced_native_secrets(
     store.retain_only(set())
     assert second_reference in protector.deleted
     assert store.read_all() == {}
+
+
+def test_secret_store_clear_removes_native_values_before_reference_index(
+    tmp_path_factory,
+):
+    path = tmp_path_factory / "provider_secrets.json"
+    protector = _ReferenceProtector()
+    store = EncryptedSecretStore(path, protector=protector)
+    store.upsert({"provider:a": "first", "provider:b": "second"})
+
+    references = set(json.loads(path.read_text(encoding="utf-8"))["secrets"].values())
+    store.clear()
+
+    assert set(protector.deleted) == references
+    assert json.loads(path.read_text(encoding="utf-8"))["secrets"] == {}

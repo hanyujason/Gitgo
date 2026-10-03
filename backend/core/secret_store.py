@@ -327,6 +327,22 @@ class EncryptedSecretStore:
                     if key not in retained:
                         self._delete_protected(value)
 
+    def clear(self) -> None:
+        """Remove every native credential, then durably empty the reference file.
+
+        Unlike ordinary orphan cleanup, uninstall must fail closed: if the OS
+        credential backend refuses a deletion, keep the reference index so the
+        operation can be retried instead of silently stranding a secret.
+        """
+        with self._lock:
+            encrypted = self._read_ciphertexts()
+            delete = getattr(self.protector, "delete", None)
+            if callable(delete):
+                for value in encrypted.values():
+                    delete(value)
+            if encrypted or self.path.exists():
+                self._write_ciphertexts({})
+
     def _write_ciphertexts(self, values: dict[str, str]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_name(f".{self.path.name}.{uuid.uuid4().hex}.tmp")

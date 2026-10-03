@@ -12,6 +12,12 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+import sys
+
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from backend.core.child_process import INTERNAL_ROLE_FLAG, TOOL_RUNNER_ROLE
 from backend.core.config import Config, ConfigManager, ProjectConfig

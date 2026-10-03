@@ -1,0 +1,86 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+INSTALL_ROOT="$SCRIPT_DIR"
+BIN_DIR="${GITGO_MACOS_BIN_DIR:-$HOME/.local/bin}"
+KEEP_CONFIG=0
+UPDATE_PATH=1
+START_MARKER="# >>> Gitgo managed PATH >>>"
+END_MARKER="# <<< Gitgo managed PATH <<<"
+
+usage() {
+  cat <<'EOF'
+Usage: uninstall.sh [--bin-dir DIR] [--keep-config] [--no-path-update]
+Runtime databases and every project directory are always preserved.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --bin-dir) BIN_DIR="$2"; shift 2 ;;
+    --keep-config) KEEP_CONFIG=1; shift ;;
+    --no-path-update) UPDATE_PATH=0; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+case "$INSTALL_ROOT" in ""|/|"$HOME") echo "Unsafe install root: $INSTALL_ROOT" >&2; exit 1 ;; esac
+if [ ! -f "$INSTALL_ROOT/product.json" ]; then echo "Missing installed product marker" >&2; exit 1; fi
+if [ "$(/usr/bin/plutil -extract platform raw -o - "$INSTALL_ROOT/product.json")" != "macos" ]; then
+  echo "Installed product marker is not for macOS" >&2
+  exit 1
+fi
+COMMAND="$(/usr/bin/plutil -extract primary_command raw -o - "$INSTALL_ROOT/product.json")"
+
+remove_owned_link() {
+  name="$1"
+  link="$BIN_DIR/$name"
+  target="$INSTALL_ROOT/$name"
+  if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then rm "$link"; fi
+}
+remove_owned_link "$COMMAND"
+index=0
+while alias="$(/usr/bin/plutil -extract "command_aliases.$index" raw -o - "$INSTALL_ROOT/product.json" 2>/dev/null)"; do
+  [ -n "$alias" ] && remove_owned_link "$alias"
+  index=$((index + 1))
+done
+
+remove_managed_block() {
+  profile="$1"
+  [ -f "$profile" ] || return 0
+  temporary="${profile}.gitgo-uninstall-$$"
+  /usr/bin/awk -v start="$START_MARKER" -v end="$END_MARKER" '
+    $0 == start { skip = 1; next }
+    $0 == end { skip = 0; next }
+    !skip { print }
+  ' "$profile" > "$temporary"
+  mv "$temporary" "$profile"
+}
+if [ "$UPDATE_PATH" -eq 1 ]; then
+  remove_managed_block "$HOME/.zprofile"
+  remove_managed_block "$HOME/.bash_profile"
+  remove_managed_block "$HOME/.config/fish/conf.d/gitgo.fish"
+fi
+
+CONFIG_ROOT="$HOME/.gitgo"
+SECRET_INDEX="$CONFIG_ROOT/provider_secrets.json"
+if [ "$KEEP_CONFIG" -eq 0 ]; then
+  if [ -f "$SECRET_INDEX" ]; then
+    HOST="$INSTALL_ROOT/internal/gitgo-host/gitgo-host"
+    if [ ! -x "$HOST" ]; then
+      echo "Cannot safely remove Keychain credentials: Native Host is missing" >&2
+      exit 1
+    fi
+    GITGO_LLM_CONFIG_PATH="$CONFIG_ROOT/llm_config.json" \
+      GITGO_LLM_SECRET_PATH="$SECRET_INDEX" \
+      "$HOST" --gitgo-internal-role credential-cleanup
+  fi
+  rm -f "$CONFIG_ROOT/config.json" "$CONFIG_ROOT/commit-config.json" \
+    "$CONFIG_ROOT/llm_config.json" "$SECRET_INDEX"
+  rmdir "$CONFIG_ROOT" 2>/dev/null || true
+fi
+
+rm -rf "$INSTALL_ROOT"
+echo "Gitgo was uninstalled. Runtime databases and project directories were preserved."
