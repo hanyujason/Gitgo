@@ -1,0 +1,86 @@
+name: Linux native package
+
+on:
+  push:
+    paths:
+      - ".github/workflows/linux-package.yml"
+      - "backend/**"
+      - "cli/dashboard/**"
+      - "packaging/**"
+      - "scripts/**"
+      - "tests/**"
+      - "requirements-portable.txt"
+  pull_request:
+    paths:
+      - ".github/workflows/linux-package.yml"
+      - "backend/**"
+      - "cli/dashboard/**"
+      - "packaging/**"
+      - "scripts/**"
+      - "tests/**"
+      - "requirements-portable.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux-x64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-portable.txt pyinstaller
+          cd cli/dashboard
+          bun install --frozen-lockfile
+
+      - name: Verify and build Linux release
+        run: ./packaging/release_linux.sh --python "$(command -v python)" --bun "$(command -v bun)" --base-ref origin/master
+
+      - name: Test clean install, packaged runtime, and safe uninstall
+        run: |
+          package_root="$RUNNER_TEMP/package"
+          test_home="$RUNNER_TEMP/home"
+          mkdir -p "$package_root" "$test_home"
+          tar -xzf dist-installer/gitgo-linux-x86_64.tar.gz -C "$package_root"
+          export HOME="$test_home"
+          export XDG_DATA_HOME="$test_home/.local/share"
+          export XDG_STATE_HOME="$test_home/.local/state"
+          export SHELL=/bin/bash
+          release_root="$package_root/linux-x86_64"
+          "$release_root/install.sh"
+          installed_root="$XDG_DATA_HOME/gitgo/app"
+          test -L "$HOME/.local/bin/gitgo"
+          python scripts/smoke_packaged_runtime.py --host "$installed_root/internal/gitgo-host/gitgo-host"
+          mkdir -p "$XDG_STATE_HOME/gitgo/projects" "$RUNNER_TEMP/project/.gitgo"
+          printf keep > "$XDG_STATE_HOME/gitgo/projects/keep.db"
+          printf keep > "$RUNNER_TEMP/project/.gitgo/project-id"
+          "$installed_root/uninstall.sh"
+          test ! -e "$installed_root"
+          test "$(cat "$XDG_STATE_HOME/gitgo/projects/keep.db")" = keep
+          test "$(cat "$RUNNER_TEMP/project/.gitgo/project-id")" = keep
+
+      - name: Upload Linux x64 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitgo-linux-x86_64
+          path: |
+            dist-installer/gitgo-linux-x86_64.tar.gz
+            dist-installer/gitgo-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14

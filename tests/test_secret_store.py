@@ -8,6 +8,7 @@ import pytest
 
 from backend.core.secret_store import (
     EncryptedSecretStore,
+    LinuxSecretServiceProtector,
     MacOSKeychainProtector,
     SecretStoreError,
     WindowsDPAPIProtector,
@@ -57,6 +58,8 @@ def test_platform_protectors_keep_the_shared_round_trip_interface():
     assert callable(WindowsDPAPIProtector.unprotect)
     assert callable(MacOSKeychainProtector.protect)
     assert callable(MacOSKeychainProtector.unprotect)
+    assert callable(LinuxSecretServiceProtector.protect)
+    assert callable(LinuxSecretServiceProtector.unprotect)
 
 
 def test_macos_keychain_protector_keeps_plaintext_behind_opaque_reference():
@@ -73,9 +76,30 @@ def test_macos_keychain_protector_keeps_plaintext_behind_opaque_reference():
         protector.unprotect(reference)
 
 
+def test_linux_secret_service_keeps_plaintext_behind_opaque_reference():
+    backend = _FakeKeychain()
+    protector = LinuxSecretServiceProtector(backend=backend)
+
+    reference = protector.protect("sk-linux-private-value")
+
+    assert reference.startswith("linux-secret-service:")
+    assert "sk-linux-private-value" not in reference
+    assert protector.unprotect(reference) == "sk-linux-private-value"
+    protector.delete(reference)
+    with pytest.raises(SecretStoreError, match="missing fake keychain item"):
+        protector.unprotect(reference)
+
+
 @pytest.mark.parametrize("reference", ["", "other:abc", "macos-keychain:not-a-uuid"])
 def test_macos_keychain_protector_rejects_invalid_references(reference):
     protector = MacOSKeychainProtector(keychain=_FakeKeychain())
+    with pytest.raises(SecretStoreError, match="reference"):
+        protector.unprotect(reference)
+
+
+@pytest.mark.parametrize("reference", ["", "other:abc", "linux-secret-service:not-a-uuid"])
+def test_linux_secret_service_rejects_invalid_references(reference):
+    protector = LinuxSecretServiceProtector(backend=_FakeKeychain())
     with pytest.raises(SecretStoreError, match="reference"):
         protector.unprotect(reference)
 

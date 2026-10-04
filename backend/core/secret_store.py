@@ -2,8 +2,9 @@
 
 Provider metadata is intentionally kept separate from credentials. Windows
 uses DPAPI for the current OS user. macOS stores each value in the login
-Keychain and writes only an opaque Keychain reference to disk. Neither backend
-creates portable credential data or places plaintext in Gitgo state files.
+Keychain, while Linux uses the desktop Secret Service through ``secret-tool``.
+Only opaque native-store references are written to disk. No backend creates
+portable credential data or places plaintext in Gitgo state files.
 """
 
 from __future__ import annotations
@@ -14,6 +15,8 @@ from ctypes import wintypes
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import threading
 import uuid
@@ -237,12 +240,102 @@ class MacOSKeychainProtector:
         self._keychain.delete(self.SERVICE, self._account(reference))
 
 
+class _LinuxSecretToolBackend:
+    """Small adapter for the freedesktop.org Secret Service command client."""
+
+    def __init__(self, executable: str | None = None) -> None:
+        self.executable = executable or shutil.which("secret-tool") or ""
+        if not self.executable:
+            raise SecretStoreError(
+                "Linux Secret Service client is unavailable; install libsecret-tools"
+            )
+
+    def _run(
+        self, action: str, service: str, account: str, *, plaintext: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        arguments = [self.executable, action]
+        if action == "store":
+            arguments.append("--label=Gitgo provider credential")
+        arguments.extend(["service", service, "account", account])
+        try:
+            return subprocess.run(
+                arguments,
+                input=(plaintext if plaintext is not None else None),
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise SecretStoreError(f"Linux Secret Service {action} failed: {exc}") from exc
+
+    @staticmethod
+    def _failure(action: str, result: subprocess.CompletedProcess[str]) -> SecretStoreError:
+        detail = (result.stderr or result.stdout or "native keyring unavailable").strip()
+        return SecretStoreError(f"Linux Secret Service {action} failed: {detail}")
+
+    def add(self, service: str, account: str, plaintext: str) -> None:
+        result = self._run("store", service, account, plaintext=plaintext)
+        if result.returncode != 0:
+            raise self._failure("write", result)
+
+    def read(self, service: str, account: str) -> str:
+        result = self._run("lookup", service, account)
+        if result.returncode != 0:
+            raise self._failure("read", result)
+        return result.stdout.removesuffix("\n")
+
+    def delete(self, service: str, account: str) -> None:
+        result = self._run("clear", service, account)
+        if result.returncode not in (0, 1):
+            raise self._failure("delete", result)
+
+
+class LinuxSecretServiceProtector:
+    """Store Linux credentials in Secret Service behind opaque references."""
+
+    SERVICE = "io.github.truman-duo.gitgo.provider-credentials"
+    REFERENCE_PREFIX = "linux-secret-service:"
+
+    def __init__(self, backend=None) -> None:
+        if not sys.platform.startswith("linux") and backend is None:
+            raise SecretStoreError("Linux Secret Service is unavailable on this platform")
+        self._backend = backend or _LinuxSecretToolBackend()
+
+    def _account(self, reference: str) -> str:
+        if not reference.startswith(self.REFERENCE_PREFIX):
+            raise SecretStoreError("Credential is not a Linux Secret Service reference")
+        account = reference[len(self.REFERENCE_PREFIX):]
+        try:
+            parsed = uuid.UUID(hex=account)
+        except (ValueError, AttributeError) as exc:
+            raise SecretStoreError("Linux Secret Service reference is invalid") from exc
+        if parsed.hex != account:
+            raise SecretStoreError("Linux Secret Service reference is invalid")
+        return account
+
+    def protect(self, plaintext: str) -> str:
+        account = uuid.uuid4().hex
+        self._backend.add(self.SERVICE, account, plaintext)
+        return f"{self.REFERENCE_PREFIX}{account}"
+
+    def unprotect(self, reference: str) -> str:
+        return self._backend.read(self.SERVICE, self._account(reference))
+
+    def delete(self, reference: str) -> None:
+        self._backend.delete(self.SERVICE, self._account(reference))
+
+
 def default_secret_protector():
     """Select the current OS credential backend without an insecure fallback."""
     if os.name == "nt":
         return WindowsDPAPIProtector()
     if sys.platform == "darwin":
         return MacOSKeychainProtector()
+    if sys.platform.startswith("linux"):
+        return LinuxSecretServiceProtector()
     raise SecretStoreError(
         f"Secure credential storage is unavailable on platform {sys.platform!r}"
     )

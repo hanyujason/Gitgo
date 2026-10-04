@@ -76,6 +76,36 @@ are preserved. `--keep-config` keeps global configuration and credentials too.
 the Windows privacy, test, clean-tree, commit-message, and build gates and never
 pushes or installs anything.
 
+## Linux package and installer
+
+`packaging/build_linux.sh` builds one native architecture at a time on Linux.
+The maintained CI target is `linux-x86_64`; the script also accepts native
+`aarch64` builders. It compiles the Bun Dashboard, freezes the Python Native
+Host with PyInstaller, exercises the packaged Host/Daemon/tool-runner, and
+creates `dist-installer/gitgo-linux-<architecture>.tar.gz` together with a
+SHA-256 file. Linux executables are always built on Linux rather than
+cross-compiled from macOS.
+
+After extracting the archive, run `./install.sh`. The per-user installer does
+not use `sudo`: it installs under `${XDG_DATA_HOME:-~/.local/share}/gitgo/app`,
+creates owned command links in `~/.local/bin`, and adds one marked PATH block
+for bash or zsh (or a fish `conf.d` file). Re-running it is an atomic upgrade
+with rollback. The installed `uninstall.sh` removes only Gitgo-owned links,
+PATH entries, global configuration, credentials, and application files. XDG
+runtime databases and every project/repository remain untouched.
+
+Provider credentials use the desktop Secret Service through `secret-tool` and
+are represented on disk only by opaque references. Debian/Ubuntu users can
+install the client with `sudo apt install libsecret-tools`; a running Secret
+Service such as GNOME Keyring or KWallet is also required. Gitgo fails closed
+instead of writing plaintext when the service is unavailable.
+
+`packaging/release_linux.sh` applies the same clean-tree, commit-message,
+privacy, Python test, Dashboard test, build, and packaged-runtime gates as the
+other platforms. `.github/workflows/linux-package.yml` runs those gates on an
+Ubuntu x64 runner, verifies a clean install and safe uninstall, and publishes
+the archive as a workflow artifact.
+
 ## Release build prerequisites
 
 `build_windows.ps1` selects `GITGO_PYTHON`, `~/.gitgo/runtime/python`, or the
@@ -108,3 +138,6 @@ also invokes Inno Setup when its compiler is already installed.
 The script never pushes, installs, rewrites Git history, downloads build tools,
 or deletes project/runtime data. `-AllowDirty` exists only for a local rehearsal
 and should not be used as release evidence.
+
+Run `packaging/release_macos.sh` on macOS or `packaging/release_linux.sh` on
+Linux for their equivalent fail-closed verification and native package build.

@@ -16,6 +16,12 @@
       "native_host": "internal/gitgo-host/gitgo-host",
       "installer": "install.sh",
       "uninstaller": "uninstall.sh"
+    },
+    "linux": {
+      "dashboard": "gitgo",
+      "native_host": "internal/gitgo-host/gitgo-host",
+      "installer": "install.sh",
+      "uninstaller": "uninstall.sh"
     }
   },
   "uninstall": {
