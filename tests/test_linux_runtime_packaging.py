@@ -10,9 +10,19 @@ import sys
 import pytest
 
 from scripts.render_product_manifest import render_manifest, render_shell_contract
+from scripts.prepare_linux_sqlite import SQLITE_SHA3_256, SQLITE_URL, SQLITE_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_linux_release_pins_a_verified_wal_safe_sqlite_source():
+    version = tuple(int(part) for part in SQLITE_VERSION.split("."))
+
+    assert version >= (3, 51, 3)
+    assert SQLITE_URL.startswith("https://www.sqlite.org/")
+    assert len(SQLITE_SHA3_256) == 64
+    assert set(SQLITE_SHA3_256) <= set("0123456789abcdef")
 
 
 def test_linux_build_and_release_entrypoints_are_fail_closed():

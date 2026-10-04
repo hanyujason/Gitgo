@@ -104,7 +104,10 @@ instead of writing plaintext when the service is unavailable.
 privacy, Python test, Dashboard test, build, and packaged-runtime gates as the
 other platforms. `.github/workflows/linux-package.yml` runs those gates on an
 Ubuntu x64 runner, verifies a clean install and safe uninstall, and publishes
-the archive as a workflow artifact.
+the archive as a workflow artifact. CI builds the pinned SQLite source in
+`scripts/prepare_linux_sqlite.py` and verifies its official SHA3-256 before
+packaging, because common Linux Python distributions may still link an SQLite
+version rejected by Gitgo's WAL safety guard.
 
 ## Release build prerequisites
 
