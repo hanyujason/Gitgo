@@ -102,7 +102,7 @@ def virtualization_probe() -> dict:
     An unsupported machine is an observation; compile/sign/cleanup failures
     are audit errors and must not be misreported as unsupported hardware.
     """
-    source = Path(__file__).with_name('probe_macos_virtualization.swift')
+    source = Path(__file__).with_name('probe_macos_virtualization.m')
     with tempfile.TemporaryDirectory(prefix='gitgo-macos-hypervisor-') as raw:
         root = Path(raw)
         executable = root / 'virtualization-probe'
@@ -112,7 +112,8 @@ def virtualization_probe() -> dict:
             'com.apple.security.virtualization': True,
         }))
         commands = [
-            ['/usr/bin/xcrun', 'swiftc', str(source), '-o', str(executable),
+            ['/usr/bin/xcrun', 'clang', '-fobjc-arc', '-Wall', '-Wextra', '-Werror', str(source), '-o', str(executable),
+             '-framework', 'Foundation',
              '-framework', 'Hypervisor', '-framework', 'Virtualization'],
             ['/usr/bin/codesign', '--force', '--sign', '-', '--identifier',
              'org.gitgo.sandbox.virtualization-probe', '--entitlements',
