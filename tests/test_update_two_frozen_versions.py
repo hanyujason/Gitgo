@@ -231,6 +231,21 @@ def test_actual_dashboard_confirmation_exits_and_bootstrap_applies_then_rolls_ba
     output = bytearray()
     screen = TerminalScreen(40, 120)
     last_frame = 0
+    def failure_context():
+        # Keep CI diagnostics bounded and structural; raw terminal output may
+        # contain profile paths and is deliberately not published here.
+        transcript = screen.transcript()
+        known_states = [value for value in ("Reading local update status", "Update status unavailable",
+            "Current version", "Downloaded and verified", "Restart/update is unavailable",
+            "Software updates  Disabled", "A new managed installation", "Retained version",
+            "Publisher release source/public keys are not configured", "Review rollback")
+            if value in transcript]
+        codes = sorted(set(re.findall(r"\bUPDATE_[A-Z_]{1,64}\b", transcript)))
+        statuses = re.findall(r'"update_status"\s*:\s*"([a-z_]{1,48})"',
+            output.decode("utf-8", "replace"))[-4:]
+        return (f"exit={proc.poll()}; states={known_states}; codes={codes}; update_statuses={statuses}; "
+            f"current_old={'Current version   ' + old_version in transcript}; "
+            f"current_new={'Current version   ' + new_version in transcript}")
     def wait_for(text, *, after=0, timeout=120):
         nonlocal last_frame
         deadline = time.monotonic() + timeout
@@ -244,26 +259,25 @@ def test_actual_dashboard_confirmation_exits_and_bootstrap_applies_then_rolls_ba
             # scrollback, just as the real macOS UI acceptance already does.
             return screen.transcript() if last_frame > after else ""
         while text not in displayed():
-            known_states = [value for value in ("Reading local update status", "Update status unavailable",
-                "Current version", "Downloaded and verified", "Restart/update is unavailable",
-                "Software updates  Disabled", "A new managed installation", "Retained version",
-                "Publisher release source/public keys are not configured", "Review rollback")
-                if value in screen.transcript()]
-            codes = sorted(set(re.findall(r"\bUPDATE_[A-Z_]{1,64}\b", screen.transcript())))
-            assert time.monotonic() < deadline, (f"actual UI did not reach {text!r}; states={known_states}; codes={codes}; "
-                f"current_old={'Current version   ' + old_version in screen.transcript()}; "
-                f"current_new={'Current version   ' + new_version in screen.transcript()}")
-            assert proc.poll() is None, "actual managed UI stopped unexpectedly"
+            assert time.monotonic() < deadline, f"actual UI did not reach {text!r}; {failure_context()}"
+            assert proc.poll() is None, "actual managed UI stopped unexpectedly; " + failure_context()
             pump()
     def pump():
         nonlocal last_frame
         if select.select([master], [], [], .1)[0]:
-            chunk = os.read(master, 65536)
+            try:
+                chunk = os.read(master, 65536)
+            except OSError as error:
+                import errno
+                if error.errno != errno.EIO:
+                    raise
+                raise AssertionError("actual managed UI closed its PTY; " + failure_context()) from error
+            assert chunk, "actual managed UI reached PTY EOF; " + failure_context()
             output.extend(chunk)
             screen.feed(chunk)
             last_frame = len(output)
             assert len(output) < 4 * 1024**2, "bounded test terminal output exceeded limit"
-        assert proc.poll() is None, "actual managed UI stopped unexpectedly"
+        assert proc.poll() is None, "actual managed UI stopped unexpectedly; " + failure_context()
     def send(text):
         settle_screen(screen, pump)
         os.write(master, text.encode())

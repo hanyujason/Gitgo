@@ -63,3 +63,28 @@ This attempt is not green. Keep its failure logs and JUnit as evidence:
 
 These corrections require a new hosted run; successful jobs on the old head do not
 prove the corrected combination. Formal release signing remains outside this run.
+
+## Second hosted attempt and fixed engine protocol
+
+Run 43571314481 tests head `1436a894d0dfa195550b8599a0bc7ef725d7c5c2`.
+Linux complete source suites, native checks and both independent package acceptances
+passed. Windows shards 0/1/2, native checks and final ZIP passed. Two additional test
+synchronization issues were isolated: the Mac listener test connected 0.004 seconds
+after bind, before listen; it now uses the existing on_ready callback and passed 20
+local real-listener repeats. A Windows blocked-I/O descendant test stopped observing
+at four seconds while the actual runner has a five-second deadline; observation now
+waits up to seven seconds or an earlier completed result, without changing the
+runner timeout or requiring less descendant-cleanup evidence.
+
+Both Linux frozen UI update tests exposed a composed product regression:
+TransactionResult gained health_failure, and coordinator asdict output accidentally
+extended the immutable API10/11 three-field protocol. The replaceable engine now
+explicitly emits status/version/error_code only. Strict launcher readers still reject
+additional fields; API12 direct transaction diagnostics remain available. Seven
+new cross-platform tests exercise actual engine serialization through the strict
+reader. PTY failure diagnostics are bounded and structural.
+
+This second attempt is not green. Its remaining Windows frozen job was explicitly
+cancelled after the incompatible engine protocol was identified, and is unverified;
+cancellation is not a passing result. A new complete run must validate the corrected
+source and independent real packages at its own head SHA.

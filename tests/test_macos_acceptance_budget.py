@@ -33,6 +33,7 @@ def test_real_listener_counts_denied_readiness_against_64_connections(monkeypatc
     # user. No root helper, execution admission, or process launch is used.
     with tempfile.TemporaryDirectory(prefix='gitgo-budget-',dir='/private/tmp') as directory:
         root=Path(directory);(root/'private').mkdir();errors=[];deadline=time.monotonic()+10
+        ready=threading.Event()
         def grant(*a,**kw):
             if time.monotonic()>deadline:raise TimeoutError('test listener deadline')
             return {'owner_uid':os.getuid()+1}
@@ -40,12 +41,14 @@ def test_real_listener_counts_denied_readiness_against_64_connections(monkeypatc
         monkeypatch.setattr(server,'grant',grant)
         monkeypatch.setattr(server.os,'chown',lambda *a,**k:None)
         def run():
-            try:server.listen(root)
+            try:server.listen(root,on_ready=ready.set)
             except BaseException as exc:errors.append(exc)
         thread=threading.Thread(target=run,daemon=True);thread.start()
         address=root/'broker.sock'
         try:
-            while not address.exists() and thread.is_alive():time.sleep(.005)
+            # bind() creates the socket path before listen() can accept. Use
+            # the real readiness callback, without spending a connection slot.
+            assert ready.wait(5),errors
             assert not errors,errors
             for _ in range(64):
                 with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as peer:

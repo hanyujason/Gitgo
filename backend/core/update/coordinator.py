@@ -5,7 +5,6 @@ The worker comes from the exact admitted application tree, copied out of the
 active slot so its image cannot block replacement. Recovery uses that SAME
 retained worker; it never replays a queued UI request after interruption.
 """
-from dataclasses import asdict
 import os
 from pathlib import Path
 import shutil
@@ -19,6 +18,13 @@ from .transaction import TransactionResult
 from .validation import fields, reject, text
 
 TICKET = "engine-request.json"
+
+
+def _result_wire(result):
+    # API 10/11 launchers are immutable and accept exactly these three fields.
+    # Internal TransactionResult diagnostics must not extend that wire format;
+    # macOS API 12 reports its health details through its direct transaction.
+    return {key: getattr(result, key) for key in ("status", "version", "error_code")}
 
 
 def _read(store):
@@ -192,7 +198,7 @@ def main(arguments):
         from .automatic import queue_on_clean_exit
         from .preparation_service import UpdatePreparationService
         queued = queue_on_clean_exit(UpdatePreparationService(store_loader=lambda: store), args.nonce or "")
-        print(dump_protocol_json(asdict(TransactionResult("exit_required" if queued else "idle"))), flush=True)
+        print(dump_protocol_json(_result_wire(TransactionResult("exit_required" if queued else "idle"))), flush=True)
         return 0
     value, cache = _read(store)
     expected = cache / "internal/gitgo-host" / ("gitgo-host.exe" if os.name == "nt" else "gitgo-host")
@@ -206,5 +212,5 @@ def main(arguments):
     else:
         answer = _consume_request(store, value["nonce"], value["exit_code"], {"complete": value["cleanup_complete"]})
     if answer is None: reject("UPDATE_ENGINE_FAILED", "Updater request produced no result")
-    print(dump_protocol_json(asdict(answer)), flush=True)
+    print(dump_protocol_json(_result_wire(answer)), flush=True)
     return 0
