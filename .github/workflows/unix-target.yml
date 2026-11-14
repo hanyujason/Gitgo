@@ -68,13 +68,13 @@ jobs:
           tests/test_promotion_file_service.py tests/test_read_approval.py
           tests/test_decision_runtime.py tests/test_workspace_candidate_service.py
           tests/test_native_read_runtime.py tests/test_native_source_runtime_fixture.py
-          -q --tb=short --junitxml=macos-stage4-source.xml
+          -q --tb=short --junitxml="${RUNNER_TEMP}/macos-stage4-source.xml"
       - name: Retain macOS stage four test outcomes including skips
         if: always() && runner.os == 'macOS'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: macos-stage4-source-${{ inputs.commit }}-${{ github.run_attempt }}
-          path: macos-stage4-source.xml
+          path: ${{ runner.temp }}/macos-stage4-source.xml
           if-no-files-found: warn
           retention-days: 14
       - name: Native installer, credentials and owned process source regressions

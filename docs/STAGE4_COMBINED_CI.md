@@ -88,3 +88,18 @@ This second attempt is not green. Its remaining Windows frozen job was explicitl
 cancelled after the incompatible engine protocol was identified, and is unverified;
 cancellation is not a passing result. A new complete run must validate the corrected
 source and independent real packages at its own head SHA.
+
+## Third attempt: retain reports outside source identity
+
+Run 43574652596 tests `f3d359c972fe393581a5bf044ccd183de3206111`.
+Linux complete source and independent packages passed on both architectures, and
+both real frozen UI update/rollback suites passed (four cases per architecture).
+Windows complete source coverage and native acceptance passed. The Mac source suite
+passed, including the repaired real listener and signal/timeout cases.
+
+Mac independent archive acceptance correctly refused source.dirty=true. Inspection
+of the actual archive confirmed the requested commit and tree; the newly retained
+JUnit file was written into the build checkout before source identity was captured.
+The workflow now writes and uploads that report from RUNNER_TEMP, outside the source
+tree. No source-cleanliness or archive identity check is weakened. Package acceptance
+and frozen forkless cases still require a fresh run using this corrected workflow.

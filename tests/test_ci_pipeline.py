@@ -169,11 +169,14 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn('continue-on-error', source)
         self.assertIn('tests/test_macos*.py tests/test_sandbox_macos.py', source['run'])
         self.assertIn('tests/test_promotion_file_service.py', source['run'])
-        self.assertIn('--junitxml=macos-stage4-source.xml', source['run'])
+        # The build's clean-source receipt includes untracked checkout files.
+        # Test reports belong outside that tree and must still be retained.
+        self.assertIn('--junitxml="${RUNNER_TEMP}/macos-stage4-source.xml"', source['run'])
         self.assertEqual(target['accept']['needs'], 'build')
         retained = next(step for step in steps
                         if step.get('name') == 'Retain macOS stage four test outcomes including skips')
         self.assertEqual(retained['if'], "always() && runner.os == 'macOS'")
+        self.assertEqual(retained['with']['path'], '${{ runner.temp }}/macos-stage4-source.xml')
         acceptance = (ROOT / 'scripts/accept_unix_archive.py').read_text(encoding='utf-8')
         self.assertIn("GITGO_SCOPE_TEST_HOST=str(host)", acceptance)
         self.assertIn("ROOT / 'tests/test_macos_forkless_scope.py'", acceptance)
