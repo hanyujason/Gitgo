@@ -12,6 +12,17 @@ import time
 TARGETS = {("macos", "arm64"), ("linux", "x86_64"), ("linux", "aarch64")}
 
 
+def validate_handoff_strategy(platform, bootstrap_api, reported):
+    """Check the immutable launcher's capability, including legacy Mac installs."""
+    supported = {"macos": {6, 9, 11, 12}, "linux": {6, 9, 11}}
+    if type(bootstrap_api) is not int or bootstrap_api not in supported.get(platform, ()):
+        raise ValueError("Unsupported installed Unix bootstrap capability")
+    expected = "after_reboot" if platform == "macos" and bootstrap_api in (6, 9, 11) else "immediate"
+    if reported != expected:
+        raise ValueError("Wrong update handoff strategy for installed bootstrap")
+    return expected
+
+
 def validate_published_identity(manifest, commit, platform, architecture, version):
     if (manifest.source_commit != commit or manifest.release_id != "v" + version
         or manifest.version != version
@@ -36,6 +47,8 @@ def native_check(source, release, commit, published):
     from scripts.unix_release_manifest import verify
     from scripts.smoke_packaged_runtime import ProtocolClient
     from backend.core.config import Config, ConfigManager
+    from backend.core.update.bootstrap_contract import CURRENT_API
+    from backend.core.update.installation import open_managed
     from backend.core.update.release_policy import parse_release_policy
     build = verify(release, commit)
     expected = policy(source, build["platform"], build["architecture"])
@@ -58,6 +71,14 @@ def native_check(source, release, commit, published):
             capture_output=True, text=True, timeout=180)
         if json.loads(result.stdout).get("managed") is not True:
             raise ValueError("Installer did not register managed installation")
+        # Inspect the provisioned authority, not just installer stdout or the
+        # candidate's metadata. This also verifies the pinned bootstrap tree.
+        registration = open_managed(install).registration
+        if any(registration[key] != build[key] for key in ("platform", "architecture")):
+            raise ValueError("Installed target differs from verified archive")
+        bootstrap_api = registration["bootstrap_api"]
+        if type(bootstrap_api) is not int or bootstrap_api != CURRENT_API:
+            raise ValueError("Initial installation did not provision the current bootstrap capability")
         client = ProtocolClient(install/"active/internal/gitgo-host/gitgo-host", env)
         try:
             def call(channel):
@@ -70,9 +91,7 @@ def native_check(source, release, commit, published):
                 raise ValueError("Installed preview trust unavailable: "+str(preview))
             if stable.get("can_check") or stable.get("status") != "unconfigured":
                 raise ValueError("Stable and preview feeds mixed")
-            strategy = "after_reboot" if build["platform"]=="macos" else "immediate"
-            if preview.get("apply_strategy") != strategy:
-                raise ValueError("Wrong update handoff strategy")
+            strategy = validate_handoff_strategy(build["platform"], bootstrap_api, preview.get("apply_strategy"))
             if published:
                 until=time.monotonic()+120
                 while preview.get("automatic",{}).get("state")!="up_to_date":
@@ -86,7 +105,7 @@ def native_check(source, release, commit, published):
             client.close()
         return {"source":build["source"], "platform":build["platform"], "architecture":build["architecture"],
             "managed_install":True, "preview_trust":True, "stable_unconfigured":True,
-            "apply_strategy":strategy, "public_automatic_check":published,
+            "bootstrap_api":bootstrap_api, "apply_strategy":strategy, "public_automatic_check":published,
             "manual_check_invoked":False, "formal_terminal_verified":False}
 
 def main():
