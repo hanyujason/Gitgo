@@ -17,16 +17,18 @@ NEW='7712b6c7-f85c-42cc-9780-851da992c246'
 ])
 def test_reboot_reference_rejects_wrong_boot_package_or_failed_suite(tmp_path_factory,change,boot):
     reference=tmp_path_factory/'prior.json'
-    reference.write_text(json.dumps(dict(boot=OLD,helper='/sealed/helper',bounded_suite_passed=True,helper_probe={'passed':True})|change))
+    helper=Path('/sealed/helper')
+    reference.write_text(json.dumps(dict(boot=OLD,helper=str(helper),bounded_suite_passed=True,helper_probe={'passed':True})|change))
     with pytest.raises(RuntimeError,match='successful reference'):
-        stability.verify_reboot_reference(reference,boot,Path('/sealed/helper'))
+        stability.verify_reboot_reference(reference,boot,helper)
 
 
 def test_reboot_reference_records_exact_evidence(tmp_path_factory):
     import hashlib
     reference=tmp_path_factory/'prior.json'
-    reference.write_text(json.dumps(dict(boot=OLD,helper='/sealed/helper',bounded_suite_passed=True,helper_probe={'passed':True})))
-    actual=stability.verify_reboot_reference(reference,NEW,Path('/sealed/helper'))
+    helper=Path('/sealed/helper')
+    reference.write_text(json.dumps(dict(boot=OLD,helper=str(helper),bounded_suite_passed=True,helper_probe={'passed':True})))
+    actual=stability.verify_reboot_reference(reference,NEW,helper)
     assert actual==dict(previous_boot=OLD,reference_sha256=hashlib.sha256(reference.read_bytes()).hexdigest())
 
 
