@@ -507,29 +507,42 @@ def test_terminal_worker_adoption_requires_explicit_handoff_without_mutating_sav
 def test_root_supervisor_adoption_is_not_subject_to_worker_handoff_block(tmp_path_factory):
     from backend.core.daemon.dispatch import _cmd_task
     from backend.core.loop.task_maintenance import KEY
+    from backend.core.loop.manager import SessionStore
+    from backend.core.loop.discussion_adoption import save_discussion, adopt_discussion
     root, tools = _supervisor(tmp_path_factory)
-    root.status = ProcessStatus.CANCELLED
-    root.result = {'status': 'cancelled'}
-    root.lifecycle_finalized = True
-    root.update_context_snapshot(lambda context: {**context, KEY: {
-        'task_id': root.active_task_id, 'process_id': root.process_id, 'epoch': 1,
-        'changes': {'saved-change': {'status': 'pending', 'content': 'Also handle this case',
-            'target_process_id': root.process_id, 'target_task_id': root.active_task_id}}}})
-    emitted = []
-    with patch('backend.core.daemon.dispatch.threading.Thread.start'):
-        _cmd_task({'action': 'chat', 'process_id': root.process_id, 'task_id': root.active_task_id,
-            'instruction': 'Adopt saved change', 'context_snapshot': {}, 'fresh_task_budget': False,
-            'adopted_change_origin': {'process_id': root.process_id,
-                'task_id': root.active_task_id, 'change_id': 'saved-change'}},
-            SimpleNamespace(workspace_path=tmp_path_factory), SimpleNamespace(name='test'),
-            {'apm': root._manager, 'dispatcher': object(), 'llm': object(), 'evq': Queue()}, emitted.append)
-    assert emitted[-1].get('result', {}).get('status') == 'pending', emitted
-    successor = root._manager.get(emitted[-1]['result']['process_id'])
-    successor._run_lock.release()
-    assert successor.active_task_id == root.active_task_id
-    assert successor.session is root.session
-    assert successor.read_context_snapshot()[0][KEY]['changes']['saved-change']['status'] == 'pending'
-    assert not any(event['event'] == 'direct_user_task_admitted' for event in successor.session.host_ledger)
+    manager = root._manager
+    store = SessionStore(str(tmp_path_factory), migrate_legacy=False)
+    manager.storage, manager.session_store = store._storage, store
+    successor = None
+    try:
+        root.status = ProcessStatus.AWAITING_USER
+        registered = save_discussion(store._storage, 'root-adoption', 'Additional case',
+            {'answer': 'Also handle this case', 'status': 'completed'},
+            [{'process_id': root.process_id, 'task_id': root.active_task_id, 'contract_revision': 0}])
+        admitted = adopt_discussion(root, store._storage, sidecar_id='root-adoption',
+            discussion_ref=registered['discussion_ref'], expected_task_id=root.active_task_id,
+            expected_contract_revision=0, store=store)
+        change_id = admitted['change']['id']
+        manager.kill(root.process_id)
+        store.save_process_checkpoint(root)
+        emitted = []
+        with patch('backend.core.daemon.dispatch.threading.Thread.start'):
+            _cmd_task({'action': 'chat', 'process_id': root.process_id, 'task_id': root.active_task_id,
+                'instruction': 'Adopt saved change', 'context_snapshot': {}, 'fresh_task_budget': False,
+                'adopted_change_origin': {'process_id': root.process_id,
+                    'task_id': root.active_task_id, 'change_id': change_id}},
+                SimpleNamespace(workspace_path=tmp_path_factory), SimpleNamespace(name='test'),
+                {'apm': manager, 'dispatcher': object(), 'llm': object(), 'evq': Queue(),
+                 'session_store': store, 'storage': store._storage}, emitted.append)
+        assert emitted[-1].get('result', {}).get('status') == 'pending', emitted
+        successor = manager.get(emitted[-1]['result']['process_id'])
+        assert successor.active_task_id == root.active_task_id
+        assert successor.session is root.session and successor.task_budget is root.task_budget
+        assert successor.read_context_snapshot()[0][KEY]['changes'][change_id]['status'] == 'pending'
+        assert not any(event['event'] == 'direct_user_task_admitted' for event in successor.session.host_ledger)
+    finally:
+        if successor is not None and successor._run_lock.locked(): successor._run_lock.release()
+        store.close()
 
 
 @pytest.mark.parametrize('accepted', [False, True])
