@@ -152,6 +152,7 @@ def test_command_timeout_is_catalogued_and_withholds_partial_outputs(tmp_path_fa
 
 def test_typed_cancellation_survives_workspace_boundary(tmp_path_factory,monkeypatch):
     from backend.core.loop.tool_pipeline import ToolExecutionCancelled
+    fake_producer(monkeypatch, tmp_path_factory)
     def run(self,name,args,timeout,**kwargs):
         (Path(args['_workspace'])/'partial.txt').write_text('unfinished')
         kwargs['runtime_metadata'].update(launch_state='started',exit_code=-1,

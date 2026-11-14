@@ -57,9 +57,8 @@ def main():
     frontend_path.write_text(json.dumps(frontend, indent=2) + "\n", encoding="utf-8")
     backend_path = checkout / "backend/version.py"
     source = backend_path.read_text(encoding="utf-8")
-    marker = '__version__ = "' + old_version + '"'
-    if source.count(marker) != 1: raise RuntimeError("Unrecognized backend version declaration")
-    backend_path.write_text(source.replace(marker, '__version__ = "' + version + '"'), encoding="utf-8")
+    from scripts.ci_version_source import successor_source
+    backend_path.write_text(successor_source(source, old_version, version), encoding="utf-8")
     run(["git", "add", "packaging/product.json", "cli/dashboard/package.json", "backend/version.py"], checkout)
     run(["git", "-c", "user.name=Windows CI", "-c", "user.email=windows-ci@local.invalid",
          "commit", "-m", "test(runtime): independently build second Windows version"], checkout)

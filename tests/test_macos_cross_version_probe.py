@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -35,6 +36,7 @@ def fixture_args(prep, tmp_path_factory):
         signature=files / "manifest.sig", archive=files / "package.tar.gz")
 
 
+@pytest.mark.skipif(os.name != "posix", reason="The macOS signed-package fixture requires POSIX installation ownership")
 def test_local_fixture_prepares_through_pinned_service_without_switch(prep, tmp_path_factory):
     args = fixture_args(prep, tmp_path_factory)
     report = probe.prepare(args)
@@ -47,6 +49,7 @@ def test_local_fixture_prepares_through_pinned_service_without_switch(prep, tmp_
     assert preferences(prep[1])["automatic_install"] is False
 
 
+@pytest.mark.skipif(os.name != "posix", reason="The macOS signed-package fixture requires POSIX installation ownership")
 def test_untrusted_metadata_cannot_select_local_archive(prep, tmp_path_factory):
     args = fixture_args(prep, tmp_path_factory)
     args.manifest.write_bytes(args.manifest.read_bytes() + b"\n")
@@ -56,6 +59,7 @@ def test_untrusted_metadata_cannot_select_local_archive(prep, tmp_path_factory):
     assert not list((prep[1].root / "control/preparation").iterdir())
 
 
+@pytest.mark.skipif(os.name != "posix", reason="The macOS signed-package fixture requires POSIX installation ownership")
 def test_signed_metadata_does_not_approve_different_local_bytes(prep, tmp_path_factory):
     args = fixture_args(prep, tmp_path_factory)
     data = args.archive.read_bytes()

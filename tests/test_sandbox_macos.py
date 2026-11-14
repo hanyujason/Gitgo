@@ -33,7 +33,10 @@ try: os.kill(int(sys.argv[1]),0)
 except PermissionError: print('child-allowed-peer-denied')
 else: raise AssertionError('Signal crossed sandbox boundary')
 '''
-        r=subprocess.run(['/usr/bin/sandbox-exec','-p',policy,'/usr/bin/python3','-I','-c',probe,str(outside.pid)],
+        # Use the Python whose roots the Host selected above. Apple's
+        # /usr/bin/python3 can dispatch into an unrelated Xcode installation;
+        # admitting that tree would change the policy under test.
+        r=subprocess.run(['/usr/bin/sandbox-exec','-p',policy,sys.executable,'-I','-c',probe,str(outside.pid)],
             cwd=work,capture_output=True,text=True,timeout=6)
         assert r.returncode==0 and r.stdout.strip()=='child-allowed-peer-denied',r.stderr
         source=Path(__file__).resolve().parents[1]

@@ -68,6 +68,18 @@ def test_frozen_child_probe_keeps_internal_python_role(runtime,monkeypatch):
         sys.executable,'--gitgo-internal-role','python','-B','-I','/probe.py','--mode','published']
 
 
+@pytest.mark.parametrize('platform',['linux','win32'])
+def test_acceptance_rejects_non_macos_before_installing(monkeypatch,tmp_path_factory,platform):
+    from scripts import check_macos_packaged_git as harness
+    from backend.core import macos_helper_install as installer
+    monkeypatch.setattr(harness,'sys',SimpleNamespace(platform=platform))
+    monkeypatch.setattr(harness,'os',SimpleNamespace(getuid=lambda:0,geteuid=lambda:0,environ={'SUDO_UID':'501'}))
+    monkeypatch.setattr(sys,'argv',['check','--run','--staged','--bundle',str(tmp_path_factory)])
+    monkeypatch.setattr(installer,'install',lambda *a,**kw:pytest.fail('Non-Mac operator reached installation'))
+    with pytest.raises(SystemExit) as exc:harness.main()
+    assert exc.value.code==2
+
+
 @pytest.mark.parametrize('failed_stage',[None,'worktree_lifecycle','normal','sealing','runtime_merge'])
 def test_result_acceptance_splits_batches_and_keeps_failure_closed(monkeypatch,tmp_path_factory,capsys,failed_stage):
     import json
@@ -77,8 +89,10 @@ def test_result_acceptance_splits_batches_and_keeps_failure_closed(monkeypatch,t
     version=tmp_path_factory/'version'
     monkeypatch.setattr(installer,'install',lambda *a,**kw:helper)
     monkeypatch.setattr(installer,'verify_bundle_path',lambda *a:version)
-    monkeypatch.setattr(harness.os,'getuid',lambda:0)
-    monkeypatch.setattr(harness.os,'geteuid',lambda:0)
+    # Model the Mac-only operator boundary locally; never alter the test
+    # runner's platform or UID while checking pure batch orchestration.
+    monkeypatch.setattr(harness,'os',SimpleNamespace(getuid=lambda:0,geteuid=lambda:0,environ=harness.os.environ))
+    monkeypatch.setattr(harness,'sys',SimpleNamespace(platform='darwin',stderr=sys.stderr,executable=sys.executable))
     monkeypatch.setenv('SUDO_UID','501')
     monkeypatch.setattr(sys,'argv',['check','--run','--staged','--bundle',str(tmp_path_factory),
         '--consumers','--objects','--checkout','--worktrees','--results','--compare','--seal','--runtime-merge'])
@@ -116,7 +130,8 @@ def test_finalization_acceptance_splits_crash_boundaries(monkeypatch,tmp_path_fa
     helper=tmp_path_factory/'gitgo-host';helper.write_bytes(b'test helper');version=tmp_path_factory/'version'
     monkeypatch.setattr(installer,'install',lambda *a,**kw:helper)
     monkeypatch.setattr(installer,'verify_bundle_path',lambda *a:version)
-    monkeypatch.setattr(harness.os,'getuid',lambda:0);monkeypatch.setattr(harness.os,'geteuid',lambda:0)
+    monkeypatch.setattr(harness,'os',SimpleNamespace(getuid=lambda:0,geteuid=lambda:0,environ=harness.os.environ))
+    monkeypatch.setattr(harness,'sys',SimpleNamespace(platform='darwin',stderr=sys.stderr,executable=sys.executable))
     monkeypatch.setenv('SUDO_UID','501')
     monkeypatch.setattr(sys,'argv',['check','--run','--staged','--bundle',str(tmp_path_factory),
         '--consumers','--objects','--checkout','--worktrees','--results','--compare','--seal','--runtime-merge','--finalize'])
