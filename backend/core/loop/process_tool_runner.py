@@ -148,8 +148,15 @@ class ProcessToolRunner:
             # Commit intent before entering the OS launch window. A kill after
             # this point leaves unknown evidence, never permission to replay.
             observation["native_record"] = prepare_native_record(native_invocation)
+            if sys.platform == "darwin":
+                from backend.core.macos_broker_client import active, run as run_broker
+                if active():
+                    return run_broker(native_invocation, input_data, observation,
+                                      cancellation_event, effective_timeout)
             proc = sandbox_popen(
                 tool_runner_command(), policy,
+                **({"invocation_id": observation["native_record"].record["invocation_id"]}
+                   if sys.platform == "darwin" else {}),
                 # DaemonClient starts ``python -m gitgo`` from the package's
                 # parent directory.  Relying on inherited cwd therefore makes
                 # the top-level ``backend`` module disappear only in real
